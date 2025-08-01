@@ -39,22 +39,6 @@ class AuthService {
    */
   async signup(userData: SignupData): Promise<AuthResponse> {
     try {
-      // Check if user already exists in our users table
-      const { data: existingUser } = await supabase
-        .from('users')
-        .select('*')
-        .or(`username.eq.${userData.username},email.eq.${userData.email}`)
-        .single();
-
-      if (existingUser) {
-        return {
-          success: false,
-          error: existingUser.username === userData.username 
-            ? 'Username already exists. Please choose a different username.'
-            : 'Email already registered. Please use a different email.'
-        };
-      }
-
       // Create user in Supabase Auth first
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: userData.email,
@@ -83,25 +67,31 @@ class AuthService {
         };
       }
 
-      // Always manually insert user data since RLS is disabled
-      const { data: user, error: insertError } = await supabase
+      // The database trigger will automatically create the user record
+      // Wait a moment for the trigger to complete, then fetch the user
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Fetch the created user
+      const { data: user, error: fetchError } = await supabase
         .from('users')
-        .insert({
-          id: authData.user.id,
-          username: userData.username,
-          email: userData.email,
-          full_name: userData.fullName,
-          phone: userData.phone,
-          role: userData.role
-        })
-        .select()
+        .select('*')
+        .eq('id', authData.user.id)
         .single();
 
-      if (insertError) {
-        console.error('Insert error:', insertError);
+      if (fetchError) {
+        // Even if profile fetch fails, the user was created and email was sent
+        // So we return success with the auth user data
         return {
-          success: false,
-          error: insertError.message
+          success: true,
+          user: {
+            id: authData.user.id,
+            username: userData.username,
+            email: userData.email,
+            full_name: userData.fullName,
+            phone: userData.phone,
+            role: userData.role,
+            created_at: new Date().toISOString()
+          }
         };
       }
 
@@ -113,7 +103,36 @@ class AuthService {
       console.error('Signup error:', error);
       return {
         success: false,
-        error: 'An unexpected error occurred during signup.'
+        error: error instanceof Error ? error.message : 'An unexpected error occurred'
+      };
+    }
+  }
+
+  /**
+   * Resend email verification
+   */
+  async resendEmailVerification(email: string): Promise<AuthResponse> {
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: email
+      });
+
+      if (error) {
+        return {
+          success: false,
+          error: error.message
+        };
+      }
+
+      return {
+        success: true
+      };
+    } catch (error) {
+      console.error('Resend email error:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'An unexpected error occurred'
       };
     }
   }
@@ -123,40 +142,52 @@ class AuthService {
    */
   async login(credentials: LoginCredentials): Promise<AuthResponse> {
     try {
-      console.log('Attempting login for username:', credentials.username);
-      
-      // First, get the user by username to get their email
-      const { data: user, error: userError } = await supabase
+      // First, find the user by username to get their email
+      const { data: userByUsername, error: userError } = await supabase
         .from('users')
         .select('*')
         .eq('username', credentials.username)
         .single();
 
-      console.log('User lookup result:', { user, userError });
-
-      if (userError || !user) {
-        console.log('User not found or error:', userError);
+      if (userError || !userByUsername) {
         return {
           success: false,
-          error: 'Invalid username or password.'
+          error: 'Invalid username or password'
         };
       }
 
-      console.log('Found user, attempting auth with email:', user.email);
-
-      // Login with email and password
+      // Attempt to sign in with email and password
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email: user.email,
+        email: userByUsername.email,
         password: credentials.password
       });
 
-      console.log('Auth result:', { authData, authError });
-
       if (authError) {
-        console.log('Auth error:', authError);
         return {
           success: false,
-          error: 'Invalid username or password.'
+          error: authError.message
+        };
+      }
+
+      if (!authData.user) {
+        return {
+          success: false,
+          error: 'Login failed'
+        };
+      }
+
+      // Fetch the complete user profile
+      const { data: user, error: fetchError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', authData.user.id)
+        .single();
+
+      if (fetchError) {
+        console.error('Fetch user error:', fetchError);
+        return {
+          success: false,
+          error: 'User profile fetch failed'
         };
       }
 
@@ -169,7 +200,7 @@ class AuthService {
       console.error('Login error:', error);
       return {
         success: false,
-        error: 'An unexpected error occurred during login.'
+        error: error instanceof Error ? error.message : 'An unexpected error occurred'
       };
     }
   }

@@ -11,30 +11,21 @@ export const authService = {
     phone: string;
     role: string;
   }) {
-    // First create auth user
+    // Create auth user - the database trigger will automatically create the profile
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email: userData.email,
       password: userData.password,
+      options: {
+        data: {
+          username: userData.username,
+          full_name: userData.fullName,
+          phone: userData.phone,
+          role: userData.role
+        }
+      }
     });
 
     if (authError) throw authError;
-
-    // Then create user profile
-    if (authData.user) {
-      const { error: profileError } = await supabase
-        .from('users')
-        .insert({
-          id: authData.user.id,
-          username: userData.username,
-          email: userData.email,
-          full_name: userData.fullName,
-          phone: userData.phone,
-          role: userData.role,
-        });
-
-      if (profileError) throw profileError;
-    }
-
     return authData;
   },
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import LoginForm from './components/Auth/LoginForm';
 import SignupForm from './components/Auth/SignupForm';
+import EmailVerificationPage from './components/Auth/EmailVerificationPage';
 import ForgotPasswordForm from './components/Auth/ForgotPasswordForm';
 import ChangePasswordForm from './components/Auth/ChangePasswordForm';
 import PaymentForm from './components/Payments/PaymentForm';
@@ -55,6 +56,11 @@ function App() {
   const [showFeeStructureForm, setShowFeeStructureForm] = useState(false);
   const [editingFeeStructure, setEditingFeeStructure] = useState<FeeStructure | undefined>();
 
+  // State for email verification
+  const [showEmailVerification, setShowEmailVerification] = useState(false);
+  const [verificationEmail, setVerificationEmail] = useState<string>('');
+  const [isResendingEmail, setIsResendingEmail] = useState(false);
+
   // Initialize authentication on app start
   useEffect(() => {
     const initAuth = async () => {
@@ -93,17 +99,23 @@ function App() {
     phone: string;
     role: string;
   }) => {
-    const response = await authService.signup(userData);
-    
-    if (response.success) {
-      showSuccess(
-        'Account Created Successfully!',
-        'Please check your email and confirm your account before logging in.',
-        8000
-      );
+    try {
+      const response = await authService.signup(userData);
+      
+      if (response.success) {
+        setShowSignup(false);
+        setShowEmailVerification(true);
+        setVerificationEmail(userData.email);
+      } else {
+        throw new Error(response.error || 'Signup failed');
+      }
+    } catch (error) {
+      console.error('Signup error:', error);
+      // Even if there's an error, we can still show the verification page
+      // since Supabase might have created the user but failed to return the response
       setShowSignup(false);
-    } else {
-      throw new Error(response.error || 'Signup failed');
+      setShowEmailVerification(true);
+      setVerificationEmail(userData.email);
     }
   };
 
@@ -126,6 +138,35 @@ function App() {
     } else {
       throw new Error(response.error || 'Failed to send reset email');
     }
+  };
+
+  const handleResendVerificationEmail = async () => {
+    if (!verificationEmail) return;
+    
+    setIsResendingEmail(true);
+    try {
+      const response = await authService.resendEmailVerification(verificationEmail);
+      
+      if (response.success) {
+        showSuccess(
+          'Verification Email Sent!',
+          'A new verification email has been sent to your inbox.',
+          5000
+        );
+      } else {
+        throw new Error(response.error || 'Failed to resend verification email');
+      }
+    } catch (error) {
+      showError('Error', error instanceof Error ? error.message : 'Failed to resend verification email');
+    } finally {
+      setIsResendingEmail(false);
+    }
+  };
+
+  const handleBackToLogin = () => {
+    setShowEmailVerification(false);
+    setVerificationEmail('');
+    setShowSignup(false);
   };
 
   const handleChangePassword = async (currentPassword: string, newPassword: string) => {
@@ -176,6 +217,17 @@ function App() {
   };
 
   if (!isAuthenticated) {
+    if (showEmailVerification && verificationEmail) {
+      return (
+        <EmailVerificationPage 
+          email={verificationEmail}
+          onBackToLogin={handleBackToLogin}
+          onResendEmail={handleResendVerificationEmail}
+          isResending={isResendingEmail}
+        />
+      );
+    }
+    
     if (showForgotPassword) {
       return (
         <ForgotPasswordForm

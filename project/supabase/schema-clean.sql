@@ -1,5 +1,27 @@
--- EduFees Management System Database Schema
+-- EduFees Management System Database Schema (Clean Version)
+-- This version can be run multiple times safely
 -- Run this in your Supabase SQL editor
+
+-- Drop existing policies first (if they exist)
+DROP POLICY IF EXISTS "Authenticated users can view students" ON public.students;
+DROP POLICY IF EXISTS "Admin users can manage students" ON public.students;
+DROP POLICY IF EXISTS "Authenticated users can view fee structures" ON public.fee_structures;
+DROP POLICY IF EXISTS "Admin users can manage fee structures" ON public.fee_structures;
+DROP POLICY IF EXISTS "Authenticated users can view fee items" ON public.fee_items;
+DROP POLICY IF EXISTS "Admin users can manage fee items" ON public.fee_items;
+DROP POLICY IF EXISTS "Authenticated users can view payments" ON public.payments;
+DROP POLICY IF EXISTS "Admin users can manage payments" ON public.payments;
+DROP POLICY IF EXISTS "Authenticated users can view payment items" ON public.payment_items;
+DROP POLICY IF EXISTS "Admin users can manage payment items" ON public.payment_items;
+
+-- Drop existing triggers first (if they exist)
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP TRIGGER IF EXISTS update_users_updated_at ON public.users;
+DROP TRIGGER IF EXISTS update_students_updated_at ON public.students;
+DROP TRIGGER IF EXISTS update_fee_structures_updated_at ON public.fee_structures;
+DROP TRIGGER IF EXISTS update_fee_items_updated_at ON public.fee_items;
+DROP TRIGGER IF EXISTS update_payments_updated_at ON public.payments;
+DROP TRIGGER IF EXISTS update_payment_items_updated_at ON public.payment_items;
 
 -- Create users table
 CREATE TABLE IF NOT EXISTS public.users (
@@ -9,6 +31,7 @@ CREATE TABLE IF NOT EXISTS public.users (
     full_name VARCHAR(255) NOT NULL,
     phone VARCHAR(20),
     role VARCHAR(50) NOT NULL DEFAULT 'user',
+    email_confirmed_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -102,11 +125,6 @@ ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.payment_items ENABLE ROW LEVEL SECURITY;
 
 -- Create RLS policies for users table
-DROP POLICY IF EXISTS "Users can view their own profile" ON public.users;
-DROP POLICY IF EXISTS "Users can update their own profile" ON public.users;
-DROP POLICY IF EXISTS "Allow signup" ON public.users;
-
--- Create corrected RLS policies for users table
 CREATE POLICY "Enable read access for authenticated users" ON public.users
     FOR SELECT USING (auth.role() = 'authenticated');
 
@@ -117,9 +135,6 @@ CREATE POLICY "Enable update for users based on id" ON public.users
     FOR UPDATE USING (auth.uid() = id);
 
 -- Create RLS policies for students table
-DROP POLICY IF EXISTS "Authenticated users can view students" ON public.students;
-DROP POLICY IF EXISTS "Admin users can manage students" ON public.students;
-
 CREATE POLICY "Authenticated users can view students" ON public.students
     FOR SELECT USING (auth.role() = 'authenticated');
 
@@ -133,9 +148,6 @@ CREATE POLICY "Admin users can manage students" ON public.students
     );
 
 -- Create RLS policies for fee_structures table
-DROP POLICY IF EXISTS "Authenticated users can view fee structures" ON public.fee_structures;
-DROP POLICY IF EXISTS "Admin users can manage fee structures" ON public.fee_structures;
-
 CREATE POLICY "Authenticated users can view fee structures" ON public.fee_structures
     FOR SELECT USING (auth.role() = 'authenticated');
 
@@ -149,9 +161,6 @@ CREATE POLICY "Admin users can manage fee structures" ON public.fee_structures
     );
 
 -- Create RLS policies for fee_items table
-DROP POLICY IF EXISTS "Authenticated users can view fee items" ON public.fee_items;
-DROP POLICY IF EXISTS "Admin users can manage fee items" ON public.fee_items;
-
 CREATE POLICY "Authenticated users can view fee items" ON public.fee_items
     FOR SELECT USING (auth.role() = 'authenticated');
 
@@ -165,9 +174,6 @@ CREATE POLICY "Admin users can manage fee items" ON public.fee_items
     );
 
 -- Create RLS policies for payments table
-DROP POLICY IF EXISTS "Authenticated users can view payments" ON public.payments;
-DROP POLICY IF EXISTS "Admin users can manage payments" ON public.payments;
-
 CREATE POLICY "Authenticated users can view payments" ON public.payments
     FOR SELECT USING (auth.role() = 'authenticated');
 
@@ -181,9 +187,6 @@ CREATE POLICY "Admin users can manage payments" ON public.payments
     );
 
 -- Create RLS policies for payment_items table
-DROP POLICY IF EXISTS "Authenticated users can view payment items" ON public.payment_items;
-DROP POLICY IF EXISTS "Admin users can manage payment items" ON public.payment_items;
-
 CREATE POLICY "Authenticated users can view payment items" ON public.payment_items
     FOR SELECT USING (auth.role() = 'authenticated');
 
@@ -200,25 +203,49 @@ CREATE POLICY "Admin users can manage payment items" ON public.payment_items
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-    INSERT INTO public.users (id, username, email, full_name, phone, role)
+    INSERT INTO public.users (id, username, email, full_name, phone, role, email_confirmed_at)
     VALUES (
         NEW.id,
         COALESCE(NEW.raw_user_meta_data->>'username', NEW.email),
         NEW.email,
         COALESCE(NEW.raw_user_meta_data->>'full_name', 'User'),
         NEW.raw_user_meta_data->>'phone',
-        COALESCE(NEW.raw_user_meta_data->>'role', 'user')
+        COALESCE(NEW.raw_user_meta_data->>'role', 'user'),
+        CASE 
+            WHEN NEW.email_confirmed_at IS NOT NULL THEN NEW.email_confirmed_at
+            ELSE NULL
+        END
     )
-    ON CONFLICT (id) DO NOTHING;
+    ON CONFLICT (id) DO UPDATE SET
+        email_confirmed_at = EXCLUDED.email_confirmed_at,
+        updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Create function to handle email confirmation
+CREATE OR REPLACE FUNCTION public.handle_email_confirmation()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.email_confirmed_at IS NOT NULL AND OLD.email_confirmed_at IS NULL THEN
+        UPDATE public.users 
+        SET email_confirmed_at = NEW.email_confirmed_at, updated_at = NOW()
+        WHERE id = NEW.id;
+    END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Create trigger for new user creation
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE OR REPLACE TRIGGER on_auth_user_created
     AFTER INSERT ON auth.users
     FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- Create trigger for email confirmation
+DROP TRIGGER IF EXISTS on_auth_user_email_confirmed ON auth.users;
+CREATE TRIGGER on_auth_user_email_confirmed
+    AFTER UPDATE ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_email_confirmation();
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION public.update_updated_at_column()
@@ -230,29 +257,23 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Create triggers for updated_at
-DROP TRIGGER IF EXISTS update_users_updated_at ON public.users;
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON public.users
     FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_students_updated_at ON public.students;
 CREATE TRIGGER update_students_updated_at BEFORE UPDATE ON public.students
     FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_fee_structures_updated_at ON public.fee_structures;
 CREATE TRIGGER update_fee_structures_updated_at BEFORE UPDATE ON public.fee_structures
     FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_fee_items_updated_at ON public.fee_items;
 CREATE TRIGGER update_fee_items_updated_at BEFORE UPDATE ON public.fee_items
     FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_payments_updated_at ON public.payments;
 CREATE TRIGGER update_payments_updated_at BEFORE UPDATE ON public.payments
     FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
-DROP TRIGGER IF EXISTS update_payment_items_updated_at ON public.payment_items;
 CREATE TRIGGER update_payment_items_updated_at BEFORE UPDATE ON public.payment_items
-    FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column(); 
+    FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 -- Temporarily disable RLS for users table (for testing only)
 ALTER TABLE public.users DISABLE ROW LEVEL SECURITY;
