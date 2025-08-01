@@ -3,6 +3,7 @@ import LoginForm from './components/Auth/LoginForm';
 import SignupForm from './components/Auth/SignupForm';
 import EmailVerificationPage from './components/Auth/EmailVerificationPage';
 import ForgotPasswordForm from './components/Auth/ForgotPasswordForm';
+import ResetPasswordPage from './components/Auth/ResetPasswordPage';
 import ChangePasswordForm from './components/Auth/ChangePasswordForm';
 import PaymentForm from './components/Payments/PaymentForm';
 import FeeStructureForm from './components/FeeStructure/FeeStructureForm';
@@ -20,6 +21,7 @@ import { mockStudents, mockPayments, mockFeeStructures, mockDashboardStats } fro
 import { Student, Payment, FeeStructure } from './types';
 import { logEnvironmentInfo } from './utils/env-helpers';
 import { authService, User } from './services/auth';
+import { studentService, paymentService, feeStructureService } from './services/database';
 import { useToast } from './hooks/useToast';
 
 function App() {
@@ -36,18 +38,12 @@ function App() {
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [students, setStudents] = useState<Student[]>(mockStudents);
-  const [payments, setPayments] = useState<Payment[]>(mockPayments.map(p => ({
-    ...p,
-    studentClass: students.find(s => s.id === p.studentId)?.class
-  })));
-  const [feeStructures, setFeeStructures] = useState<FeeStructure[]>(mockFeeStructures);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [feeStructures, setFeeStructures] = useState<FeeStructure[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filteredStudents, setFilteredStudents] = useState<Student[]>(mockStudents);
-  const [filteredPayments, setFilteredPayments] = useState<Payment[]>(mockPayments.map(p => ({
-    ...p,
-    studentClass: students.find(s => s.id === p.studentId)?.class
-  })));
+  const [filteredStudents, setFilteredStudents] = useState<Student[]>([]);
+  const [filteredPayments, setFilteredPayments] = useState<Payment[]>([]);
   
   // Modal states
   const [showStudentForm, setShowStudentForm] = useState(false);
@@ -61,6 +57,27 @@ function App() {
   const [verificationEmail, setVerificationEmail] = useState<string>('');
   const [isResendingEmail, setIsResendingEmail] = useState(false);
 
+  // State for reset password
+  const [showResetPassword, setShowResetPassword] = useState(false);
+
+  // Debug activeTab changes
+  useEffect(() => {
+    console.log('Active tab changed to:', activeTab);
+  }, [activeTab]);
+
+  // Check for reset password URL
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const accessToken = urlParams.get('access_token');
+    const refreshToken = urlParams.get('refresh_token');
+    
+    if (accessToken && refreshToken) {
+      // User is on reset password page
+      console.log('Reset password tokens detected in URL');
+      setShowResetPassword(true);
+    }
+  }, []);
+
   // Initialize authentication on app start
   useEffect(() => {
     const initAuth = async () => {
@@ -69,6 +86,8 @@ function App() {
         if (user) {
           setCurrentUser(user);
           setIsAuthenticated(true);
+          // Ensure dashboard is the active tab when user is already authenticated
+          setActiveTab('dashboard');
         }
       } catch (error) {
         console.error('Auth initialization error:', error);
@@ -78,6 +97,34 @@ function App() {
     initAuth();
   }, []);
 
+  // Load students from database when authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      const loadData = async () => {
+        try {
+          // Load students
+          const studentsData = await studentService.getAll();
+          setStudents(studentsData);
+          setFilteredStudents(studentsData);
+
+          // Load payments
+          const paymentsData = await paymentService.getAll();
+          setPayments(paymentsData);
+          setFilteredPayments(paymentsData);
+
+          // Load fee structures
+          const feeStructuresData = await feeStructureService.getAll();
+          setFeeStructures(feeStructuresData);
+        } catch (error) {
+          console.error('Error loading data:', error);
+          showError('Error', 'Failed to load data from database');
+        }
+      };
+
+      loadData();
+    }
+  }, [isAuthenticated]);
+
   const handleLogin = async (credentials: { username: string; password: string }) => {
     const response = await authService.login(credentials);
     
@@ -86,6 +133,8 @@ function App() {
       setCurrentUser(response.user);
       setIsAuthenticated(true);
       setShowSignup(false);
+      // Ensure dashboard is the active tab after login
+      setActiveTab('dashboard');
     } else {
       throw new Error(response.error || 'Login failed');
     }
@@ -217,6 +266,18 @@ function App() {
   };
 
   if (!isAuthenticated) {
+    if (showResetPassword) {
+      return (
+        <ResetPasswordPage 
+          onBackToLogin={() => {
+            setShowResetPassword(false);
+            // Clear the URL parameters
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }}
+        />
+      );
+    }
+    
     if (showEmailVerification && verificationEmail) {
       return (
         <EmailVerificationPage 
@@ -270,38 +331,51 @@ function App() {
     console.log('View student:', student);
   };
 
-  const handleSaveStudent = (studentData: Partial<Student>) => {
-    if (editingStudent) {
-      // Update existing student
-      const updatedStudents = students.map(s => 
-        s.id === editingStudent.id ? { ...s, ...studentData } : s
-      );
-      setStudents(updatedStudents);
-      setFilteredStudents(updatedStudents);
-    } else {
-      // Add new student
-      const newStudent: Student = {
-        ...studentData as Student,
-        id: Date.now().toString()
-      };
-      const updatedStudents = [...students, newStudent];
-      setStudents(updatedStudents);
-      setFilteredStudents(updatedStudents);
+  const handleSaveStudent = async (studentData: Partial<Student>) => {
+    try {
+      if (editingStudent) {
+        // Update existing student
+        const updatedStudent = await studentService.update(editingStudent.id, studentData);
+        const updatedStudents = students.map(s => 
+          s.id === editingStudent.id ? updatedStudent : s
+        );
+        setStudents(updatedStudents);
+        setFilteredStudents(updatedStudents);
+        showSuccess('Student Updated!', `${updatedStudent.name} has been updated successfully.`);
+      } else {
+        // Add new student
+        const newStudent = await studentService.create(studentData as Omit<Student, 'id'>);
+        const updatedStudents = [...students, newStudent];
+        setStudents(updatedStudents);
+        setFilteredStudents(updatedStudents);
+        showSuccess('Student Added!', `${newStudent.name} has been added successfully.`);
+      }
+      setShowStudentForm(false);
+      setEditingStudent(undefined);
+    } catch (error) {
+      console.error('Error saving student:', error);
+      showError('Error', error instanceof Error ? error.message : 'Failed to save student');
     }
-    setShowStudentForm(false);
-    setEditingStudent(undefined);
   };
 
-  const handleDeleteStudent = (student: Student) => {
+  const handleDeleteStudent = async (student: Student) => {
     if (window.confirm(`Are you sure you want to delete ${student.name}? This action cannot be undone.`)) {
-      const updatedStudents = students.filter(s => s.id !== student.id);
-      setStudents(updatedStudents);
-      setFilteredStudents(updatedStudents);
-      
-      // Also remove any payments associated with this student
-      const updatedPayments = payments.filter(p => p.studentId !== student.id);
-      setPayments(updatedPayments);
-      setFilteredPayments(updatedPayments);
+      try {
+        await studentService.delete(student.id);
+        const updatedStudents = students.filter(s => s.id !== student.id);
+        setStudents(updatedStudents);
+        setFilteredStudents(updatedStudents);
+        
+        // Also remove any payments associated with this student
+        const updatedPayments = payments.filter(p => p.studentId !== student.id);
+        setPayments(updatedPayments);
+        setFilteredPayments(updatedPayments);
+        
+        showSuccess('Student Deleted!', `${student.name} has been deleted successfully.`);
+      } catch (error) {
+        console.error('Error deleting student:', error);
+        showError('Error', error instanceof Error ? error.message : 'Failed to delete student');
+      }
     }
   };
 
@@ -309,21 +383,52 @@ function App() {
     setShowPaymentForm(true);
   };
 
-  const handleSavePayment = (paymentData: any) => {
-    const newPayment: Payment = {
-      id: Date.now().toString(),
-      ...paymentData,
-      studentClass: students.find(s => s.id === paymentData.studentId)?.class
-    };
-    const updatedPayments = [...payments, newPayment];
-    setPayments(updatedPayments);
-    setFilteredPayments(updatedPayments);
-    setShowPaymentForm(false);
+  const handleSavePayment = async (paymentData: any) => {
+    try {
+      const newPayment = await paymentService.create(paymentData);
+      const updatedPayments = [...payments, newPayment];
+      setPayments(updatedPayments);
+      setFilteredPayments(updatedPayments);
+      setShowPaymentForm(false);
+      showSuccess('Payment Recorded!', `Payment of ${newPayment.paidAmount} has been recorded successfully.`);
+    } catch (error) {
+      console.error('Error saving payment:', error);
+      showError('Error', error instanceof Error ? error.message : 'Failed to save payment');
+    }
   };
 
   const handleViewReceipt = (payment: Payment) => {
     // Handle view receipt logic
     console.log('View receipt:', payment);
+  };
+
+  const handleDeletePayment = async (payment: Payment) => {
+    if (window.confirm(`Are you sure you want to delete this payment record? This action cannot be undone.`)) {
+      try {
+        await paymentService.delete(payment.id);
+        const updatedPayments = payments.filter(p => p.id !== payment.id);
+        setPayments(updatedPayments);
+        setFilteredPayments(updatedPayments);
+        showSuccess('Payment Deleted!', 'Payment record has been deleted successfully.');
+      } catch (error) {
+        console.error('Error deleting payment:', error);
+        showError('Error', error instanceof Error ? error.message : 'Failed to delete payment');
+      }
+    }
+  };
+
+  const handleDeleteFeeStructure = async (structure: FeeStructure) => {
+    if (window.confirm(`Are you sure you want to delete the fee structure for ${structure.class}? This action cannot be undone.`)) {
+      try {
+        await feeStructureService.delete(structure.id);
+        const updatedStructures = feeStructures.filter(fs => fs.id !== structure.id);
+        setFeeStructures(updatedStructures);
+        showSuccess('Fee Structure Deleted!', `Fee structure for ${structure.class} has been deleted successfully.`);
+      } catch (error) {
+        console.error('Error deleting fee structure:', error);
+        showError('Error', error instanceof Error ? error.message : 'Failed to delete fee structure');
+      }
+    }
   };
 
   const handleAddStructure = () => {
@@ -336,22 +441,29 @@ function App() {
     setShowFeeStructureForm(true);
   };
 
-  const handleSaveFeeStructure = (feeStructureData: Partial<FeeStructure>) => {
-    if (editingFeeStructure) {
-      // Update existing fee structure
-      setFeeStructures(prev => prev.map(fs => 
-        fs.id === editingFeeStructure.id ? { ...fs, ...feeStructureData } : fs
-      ));
-    } else {
-      // Add new fee structure
-      const newFeeStructure: FeeStructure = {
-        ...feeStructureData as FeeStructure,
-        id: Date.now().toString()
-      };
-      setFeeStructures(prev => [...prev, newFeeStructure]);
+  const handleSaveFeeStructure = async (feeStructureData: Partial<FeeStructure>) => {
+    try {
+      if (editingFeeStructure) {
+        // Update existing fee structure
+        const updatedStructure = await feeStructureService.update(editingFeeStructure.id, feeStructureData);
+        const updatedStructures = feeStructures.map(fs => 
+          fs.id === editingFeeStructure.id ? updatedStructure : fs
+        );
+        setFeeStructures(updatedStructures);
+        showSuccess('Fee Structure Updated!', `Fee structure for ${updatedStructure.class} has been updated successfully.`);
+      } else {
+        // Add new fee structure
+        const newFeeStructure = await feeStructureService.create(feeStructureData as Omit<FeeStructure, 'id'>);
+        const updatedStructures = [...feeStructures, newFeeStructure];
+        setFeeStructures(updatedStructures);
+        showSuccess('Fee Structure Added!', `Fee structure for ${newFeeStructure.class} has been added successfully.`);
+      }
+      setShowFeeStructureForm(false);
+      setEditingFeeStructure(undefined);
+    } catch (error) {
+      console.error('Error saving fee structure:', error);
+      showError('Error', error instanceof Error ? error.message : 'Failed to save fee structure');
     }
-    setShowFeeStructureForm(false);
-    setEditingFeeStructure(undefined);
   };
 
   const renderContent = () => {
@@ -386,6 +498,7 @@ function App() {
             payments={filteredPayments}
             onAddPayment={handleAddPayment}
             onViewReceipt={handleViewReceipt}
+            onDeletePayment={handleDeletePayment}
           />
         );
       
@@ -395,6 +508,7 @@ function App() {
             feeStructures={feeStructures}
             onAddStructure={handleAddStructure}
             onEditStructure={handleEditStructure}
+            onDeleteStructure={handleDeleteFeeStructure}
           />
         );
       

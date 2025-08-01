@@ -257,17 +257,23 @@ class AuthService {
    */
   async requestPasswordReset(email: string): Promise<{ success: boolean; error?: string }> {
     try {
+      console.log('Requesting password reset for email:', email);
+      
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: `${window.location.origin}/reset-password`,
       });
 
+      console.log('Password reset response:', { error });
+
       if (error) {
+        console.error('Password reset error:', error);
         return {
           success: false,
           error: error.message
         };
       }
 
+      console.log('Password reset email sent successfully');
       return {
         success: true
       };

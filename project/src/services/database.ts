@@ -454,5 +454,21 @@ export const paymentService = {
         status: item.status as any,
       })),
     };
+  },
+
+  async delete(id: string): Promise<void> {
+    // Delete payment items first (due to foreign key constraint)
+    await supabase
+      .from('payment_items')
+      .delete()
+      .eq('payment_id', id);
+
+    // Delete payment
+    const { error } = await supabase
+      .from('payments')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
   }
 };
