@@ -39,6 +39,8 @@ class AuthService {
    */
   async signup(userData: SignupData): Promise<AuthResponse> {
     try {
+      console.log('Starting signup process for:', userData.email);
+      
       // Create user in Supabase Auth first
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: userData.email,
@@ -53,7 +55,10 @@ class AuthService {
         }
       });
 
+      console.log('Supabase signup response:', { authData, authError });
+
       if (authError) {
+        console.error('Signup error:', authError);
         return {
           success: false,
           error: authError.message
@@ -61,43 +66,30 @@ class AuthService {
       }
 
       if (!authData.user) {
+        console.error('No user returned from signup');
         return {
           success: false,
           error: 'User creation failed'
         };
       }
 
-      // The database trigger will automatically create the user record
-      // Wait a moment for the trigger to complete, then fetch the user
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      console.log('User created successfully:', authData.user.id);
+      console.log('Email confirmation status:', authData.user.email_confirmed_at);
 
-      // Fetch the created user
-      const { data: user, error: fetchError } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', authData.user.id)
-        .single();
-
-      if (fetchError) {
-        // Even if profile fetch fails, the user was created and email was sent
-        // So we return success with the auth user data
-        return {
-          success: true,
-          user: {
-            id: authData.user.id,
-            username: userData.username,
-            email: userData.email,
-            full_name: userData.fullName,
-            phone: userData.phone,
-            role: userData.role,
-            created_at: new Date().toISOString()
-          }
-        };
-      }
-
+      // Return success immediately - the database trigger will handle profile creation
+      // and the email verification page will show regardless of profile fetch
+      console.log('Signup completed successfully - email should be sent');
       return {
         success: true,
-        user: user
+        user: {
+          id: authData.user.id,
+          username: userData.username,
+          email: userData.email,
+          full_name: userData.fullName,
+          phone: userData.phone,
+          role: userData.role,
+          created_at: new Date().toISOString()
+        }
       };
     } catch (error) {
       console.error('Signup error:', error);
